@@ -1,50 +1,63 @@
-# SpeedArti — CALPI V0.2.0 — Formes
+# SpeedArti — CALPI V0.3.0 — Optimisation 2D des chutes
 
-Cette version développe l'étape **Forme** du module de calepinage.
+Démonstration autonome du module métier de calepinage SpeedArti.
 
-## Formes disponibles
-- Rectangle
-- L
-- U
-- T
-- Forme libre orthogonale
+## Nouveauté V0.3.0
 
-`Importer un plan` reste volontairement hors V0.2.
+Cette version remplace la gestion conservatrice des chutes complexes par une vraie optimisation 2D orthogonale.
 
-## Forme libre
-La forme libre utilise un contour de points exacts en millimètres :
-- minimum 4 points ;
-- dernier point relié automatiquement au premier ;
-- segments horizontaux ou verticaux uniquement ;
-- auto-croisement interdit ;
-- aperçu SVG et surface exacte ;
-- coordonnées modifiables point par point.
+Le moteur sait désormais :
+- construire une pièce avec encoche à partir de plusieurs fragments géométriques connectés ;
+- conserver la forme exacte d'une chute en L ou d'une autre forme orthogonale ;
+- stocker cette chute comme une région 2D réelle et non comme son simple rectangle englobant ;
+- vérifier qu'une future pièce tient réellement dans la matière encore disponible ;
+- tester une rotation de 90° lorsque l'utilisateur l'autorise ;
+- recalculer le reliquat exact après chaque réemploi ;
+- séparer automatiquement deux reliquats physiquement distincts en deux chutes différentes ;
+- conserver la filiation d'une chute vers les chutes produites après réemploi ;
+- interdire tout double usage d'un même identifiant de chute.
 
-Des bases Rectangle / L / U / T sont proposées dans l'éditeur pour accélérer la saisie, mais elles restent modifiables.
+## Fonctionnalités conservées
 
-## Moteur
-Le moteur reste pur et indépendant de l'interface.
+- Rectangle, L, U, T et forme libre orthogonale ;
+- rotations de la pièce 0 / 90 / 180 / 270° ;
+- 8 familles de matériaux ;
+- 5 formats rapides par famille + dimensions manuelles ;
+- pose droite ;
+- pose 1/2 avec cycle strict sur 2 rangées ;
+- pose 1/3 avec cycle strict sur 3 rangées ;
+- orientation X / Y ;
+- équilibrage des rives ;
+- plan de pose ;
+- ordre de pose ;
+- stock virtuel des chutes ;
+- contrôles et balises CALPI.
 
-La géométrie des formes complexes n'est jamais remplacée par un rectangle approximatif. Le moteur calcule un polygone exact puis génère les bandes de pose correspondant réellement à la forme.
+## Architecture
 
-### Limitation explicitement tracée
-En V0.2, les chutes créées par une **encoche complexe** sont encore optimisées de manière conservatrice comme fragments rectangulaires. La géométrie du plan reste exacte ; cette limite d'optimisation matière est signalée par `CALPI-036`.
+- `engine.js` : moteur métier pur V0.3.0 ;
+- `formats.js` : formats de démonstration ;
+- `app.js` : interface ;
+- `styles.css` : styles ;
+- `tests.js` : tests métier ;
+- `FIELDS.md` : contrat des champs ;
+- `BALISES.md` : registre des contrôles ;
+- `TESTS.md` : plan de tests ;
+- `DEPLOY_GITHUB_PAGES.md` : publication ;
+- `COMMIT_V0_3_0.txt` : message de commit proposé.
 
-## Fichiers
-- `engine.js` : moteur métier V0.2.0
-- `formats.js` : formats matière
-- `app.js` : interface de démonstration
-- `styles.css`
-- `index.html`
-- `tests.js`
-- `FIELDS.md`
-- `BALISES.md`
-- `TESTS.md`
+## Important
 
-## Tests
+La rotation 90° des chutes est un réglage utilisateur. Elle doit rester désactivée pour les matériaux directionnels lorsque l'artisan veut conserver le fil, le décor ou le sens de lame.
+
+Aucun prix n'est calculé dans CALPI.
+
+## Test
+
+Exécuter :
 
 `node tests.js`
 
 Résultat attendu :
 
-`CALPI tests V0.2.0: OK`
+`CALPI tests V0.3.0: OK`

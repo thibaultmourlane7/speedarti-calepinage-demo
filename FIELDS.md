@@ -1,61 +1,70 @@
-# CALPI — Contrat des champs V0.2.0
+# CALPI — Contrat des champs V0.3.0
 
-Les noms de champs moteur existants sont conservés. Les nouvelles données de forme sont ajoutées sans renommer les champs V0.1.2.
+Les champs V0.2 sont conservés. Aucun champ moteur existant n'est renommé.
 
-## Champs moteur stables
+## Entrées moteur
 
 | Champ | Type | Unité | Obligatoire | Rôle |
 |---|---|---:|---|---|
-| `materialType` | string | — | oui | Famille comprise par le moteur |
+| `materialType` | string | — | oui | Famille matériau comprise par le moteur |
 | `materialLengthMm` | number | mm | oui | Longueur exacte d'un élément neuf |
 | `materialWidthMm` | number | mm | oui | Largeur exacte d'un élément neuf |
 | `jointWidthMm` | number | mm | oui | Joint / espace entre éléments |
-| `roomLengthMm` | number | mm | guidé | Largeur extérieure X des formes guidées |
-| `roomWidthMm` | number | mm | guidé | Hauteur extérieure Y des formes guidées |
+| `roomLengthMm` | number | mm | guidé | Axe X extérieur des formes guidées |
+| `roomWidthMm` | number | mm | guidé | Axe Y extérieur des formes guidées |
 | `roomShape` | string | — | oui | `rectangle`, `l_shape`, `u_shape`, `t_shape`, `free_orthogonal` |
 | `shapeRotationDeg` | number | ° | oui | `0`, `90`, `180`, `270` |
-| `shapeDimensions` | object | mm | selon forme | Dimensions spécifiques L/U/T |
-| `roomOutlinePoints` | array | mm | forme libre | Points ordonnés `{xMm,yMm}` du contour |
+| `shapeDimensions` | object | mm | selon forme | Dimensions L/U/T |
+| `roomOutlinePoints` | array | mm | forme libre | Points `{xMm,yMm}` du contour |
 | `orientation` | string | — | oui | `lengthwise` ou `widthwise` |
 | `pattern` | string | — | oui | `straight`, `half`, `third` |
 | `edgeMode` | string | — | oui | `as_is` ou `balanced` |
-| `minimumEdgeWidthMm` | number | mm | oui | Largeur mini de rive |
-| `minimumReusableLengthMm` | number | mm | oui | Longueur mini d'une chute réutilisable |
-| `minimumReusableWidthMm` | number | mm | oui | Largeur mini d'une chute réutilisable |
+| `minimumEdgeWidthMm` | number | mm | oui | Largeur minimale de rive |
+| `minimumReusableLengthMm` | number | mm | oui | Longueur minimale de matière réutilisable |
+| `minimumReusableWidthMm` | number | mm | oui | Largeur minimale de matière réutilisable |
+| `allowOffcutRotation` | boolean | — | oui | Autorise le moteur à tester une rotation 90° d'une chute |
 
-## `shapeDimensions`
+## Sorties 2D ajoutées V0.3
 
-### Forme L
-- `cutoutWidthMm`
-- `cutoutHeightMm`
-
-Le décroché de référence est construit en haut à droite, puis `shapeRotationDeg` permet les 4 orientations.
-
-### Forme U
-- `openingWidthMm`
-- `openingDepthMm`
-- `openingOffsetMm`
-
-L'ouverture de référence est en haut. `openingOffsetMm` est mesuré depuis la gauche. La rotation permet les 4 orientations.
-
-### Forme T
-- `barThicknessMm`
-- `stemWidthMm`
-- `stemOffsetMm`
-
-La barre de référence est en haut. `stemOffsetMm` positionne le pied depuis la gauche. La rotation permet les 4 orientations.
-
-### Forme libre
-`roomOutlinePoints` contient le contour dans l'ordre. Le moteur ferme automatiquement le dernier point vers le premier. Chaque segment doit être horizontal ou vertical.
-
-## Sorties ajoutées V0.2
+### Sur chaque pièce posée
 
 | Champ | Type | Rôle |
 |---|---|---|
-| `roomPolygon` | array | Polygone exact normalisé de la pièce |
-| `roomBounds` | object | Boîte englobante exacte |
-| `roomAreaMm2` | number | Surface exacte de la pièce |
-| `materialCoveredAreaMm2` | number | Surface couverte par les fragments de matériau hors joints |
-| `geometrySplitBandCount` | number | Nombre de bandes créées par les décrochements |
+| `shapeType` | string | `rectangle` ou `orthogonal` |
+| `shapeCells` | array | Décomposition 2D exacte de la pièce dans son repère local |
+| `shapeContours` | array | Contour(s) orthogonal(aux) de la pièce |
+| `layoutCells` | array | Cellules exactes dans le plan de pose |
+| `roomCells` | array | Cellules exactes dans le repère de la pièce |
+| `sourceRotationDeg` | number | Rotation 0° ou 90° utilisée lors d'un réemploi |
+| `producedOffcutIds` | array | Liste de toutes les chutes produites par la découpe |
+
+### Sur chaque chute
+
+| Champ | Type | Rôle |
+|---|---|---|
+| `id` | string | Identifiant stable `C1`, `C2`, etc. |
+| `shapeType` | string | `rectangle` ou `orthogonal` |
+| `cells` | array | Région 2D exacte sous forme de rectangles non chevauchants |
+| `contours` | array | Contour(s) exact(s) dérivés de `cells` |
+| `contourPoints` | array | Premier contour pour compatibilité simple |
+| `areaMm2` | number | Aire réelle de la chute |
+| `lengthMm` | number | Largeur de la boîte englobante, conservée pour compatibilité |
+| `widthMm` | number | Hauteur de la boîte englobante, conservée pour compatibilité |
+| `parentOffcutId` | string/null | Chute parente si le reliquat vient d'un réemploi |
+| `status` | string | `available`, `used`, `lost` |
+| `usedAt` | object/null | Position de réemploi |
+
+### Statistiques V0.3
+
+| Champ | Type | Rôle |
+|---|---|---|
+| `complexInstalledPieceCount` | number | Nombre de pièces posées avec encoche / contour orthogonal complexe |
+| `complexOffcutsCreated` | number | Nombre de chutes 2D complexes créées |
+| `twoDReuseCount` | number | Nombre de réemplois impliquant une chute ou une pièce complexe |
+| `rotatedOffcutReuseCount` | number | Nombre de réemplois avec rotation 90° |
+
+## Règle de compatibilité
+
+`lengthMm` et `widthMm` d'une chute complexe représentent uniquement sa boîte englobante. Ils ne suffisent jamais à décider qu'une future pièce rentre. Le moteur doit obligatoirement utiliser `cells` pour contrôler la couverture 2D réelle.
 
 Tout renommage futur doit être annoncé explicitement avant intégration SpeedArti.

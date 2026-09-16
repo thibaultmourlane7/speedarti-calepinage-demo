@@ -1,0 +1,13 @@
+feat(calpi): optimisation 2D exacte des chutes complexes V0.3.0
+
+- conserve le contour réel des chutes orthogonales
+- représente les chutes par cellules 2D exactes et contours
+- teste une future pièce dans la matière réellement disponible
+- autorise la rotation 90° selon réglage utilisateur
+- regroupe les fragments d’une même pièce pour créer les vraies encoches L/U/T
+- recalcule les reliquats après chaque réemploi
+- scinde les reliquats physiquement séparés en chutes distinctes
+- conserve la traçabilité parent/enfant et l’anti-double-usage
+- ajoute CALPI-037, CALPI-038 et CALPI-039
+- met CALPI-036 à OK lorsque l’optimisation 2D est active
+- ajoute des tests métier de création et réemploi d’une chute en L

@@ -20,6 +20,7 @@ function base(overrides = {}) {
     minimumEdgeWidthMm: 80,
     minimumReusableLengthMm: 300,
     minimumReusableWidthMm: 80,
+    allowOffcutRotation: false,
     ...overrides
   };
 }
@@ -145,4 +146,64 @@ assert.strictEqual(r.axes.fieldWidthMm, 5000);
 const used = r.offcuts.filter(o => o.status === 'used').map(o => o.id);
 assert.strictEqual(new Set(used).size, used.length);
 
-console.log('CALPI tests V0.2.0: OK');
+// --- V0.3 : optimisation 2D exacte des chutes complexes ---
+const T = Engine.__test;
+
+// Une découpe rectangulaire dans un élément crée ici une vraie chute en L.
+const sourceRegion = [{ xMm: 0, yMm: 0, widthMm: 1000, heightMm: 600 }];
+const removed = [{ xMm: 0, yMm: 0, widthMm: 700, heightMm: 400 }];
+const lRemainder = T.subtractShapeFromCells(sourceRegion, removed);
+assert.strictEqual(T.cellsArea(lRemainder), 320000);
+assert.strictEqual(T.groupConnectedCells(lRemainder).length, 1);
+assert.strictEqual(T.cellsToContours(lRemainder).length, 1);
+assert.ok(T.cellsToContours(lRemainder)[0].length >= 6, 'La chute doit conserver un contour en L et non son rectangle englobant.');
+
+// Une pièce 300x600 rentre réellement dans la branche droite de la chute en L.
+let placement = T.findBestPlacement(
+  lRemainder,
+  [{ xMm: 0, yMm: 0, widthMm: 300, heightMm: 600 }],
+  { minimumReusableLengthMm: 100, minimumReusableWidthMm: 100, allowOffcutRotation: true },
+  true
+);
+assert.ok(placement);
+assert.strictEqual(placement.rotationDeg, 0);
+
+// Une pièce 600x300 ne rentre qu'en tournant la chute / pièce de 90° dans cette région.
+placement = T.findBestPlacement(
+  lRemainder,
+  [{ xMm: 0, yMm: 0, widthMm: 600, heightMm: 300 }],
+  { minimumReusableLengthMm: 100, minimumReusableWidthMm: 100, allowOffcutRotation: true },
+  true
+);
+assert.ok(placement);
+assert.strictEqual(placement.rotationDeg, 90);
+
+// Scénario de pièce en L : génération puis réemploi d'une chute 2D complexe.
+r = Engine.calculate(base({
+  materialType: 'tile',
+  materialLengthMm: 1000,
+  materialWidthMm: 600,
+  roomLengthMm: 1800,
+  roomWidthMm: 900,
+  roomShape: 'l_shape',
+  shapeDimensions: { cutoutWidthMm: 600, cutoutHeightMm: 300 },
+  edgeMode: 'as_is',
+  minimumEdgeWidthMm: 50,
+  minimumReusableLengthMm: 100,
+  minimumReusableWidthMm: 100,
+  allowOffcutRotation: true
+}));
+assert.notStrictEqual(r.status, 'BLOQUANT');
+assert.strictEqual(r.materialCoveredAreaMm2, r.roomAreaMm2);
+assert.ok(r.complexInstalledPieceCount >= 1, 'Au moins une pièce avec encoche doit être construite comme une forme 2D.');
+assert.ok(r.complexOffcutsCreated >= 1, 'Une chute complexe doit être créée.');
+assert.ok(r.twoDReuseCount >= 1, 'Une chute complexe doit être réellement réutilisée.');
+assert.ok(r.controls.some(c => c.tag === 'CALPI-036' && c.status === 'OK'));
+assert.ok(r.controls.some(c => c.tag === 'CALPI-037' && c.status === 'OK'));
+assert.ok(r.offcuts.some(o => o.shapeType === 'orthogonal' && o.cells.length > 1));
+
+// Conservation exacte de matière sur le scénario, hors chutes encore disponibles/perdues déjà tracées.
+const usedIds = r.offcuts.filter(o => o.status === 'used').map(o => o.id);
+assert.strictEqual(new Set(usedIds).size, usedIds.length);
+
+console.log('CALPI tests V0.3.0: OK');

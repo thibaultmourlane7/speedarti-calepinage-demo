@@ -1,44 +1,55 @@
-# CALPI — Plan de tests métier V0.2.0
+# CALPI — Plan de tests métier V0.3.0
 
-## Régression V0.1.2
-- 8 familles de matériaux.
-- 5 formats rapides par famille.
-- saisie manuelle conservée.
-- pose 1/2 : `1380 / 690 / 1380 / 690 ...`.
-- pose 1/3 : `1380 / 920 / 460 / 1380 ...`.
-- anti-double-usage des chutes.
+## Régression V0.1 / V0.2
+- formats rapides toujours disponibles ;
+- rectangle, L, U, T et forme libre toujours calculés exactement ;
+- rotation de la pièce conservée ;
+- forme libre diagonale bloquée ;
+- forme libre auto-croisée bloquée ;
+- pose 1/2 verrouillée sur 2 positions ;
+- pose 1/3 verrouillée sur 3 positions ;
+- anti-double-usage toujours actif.
 
-## Rectangle
-- 5000 × 4000 = 20 m² exacts.
+## Optimisation 2D V0.3
 
-## L
-- extérieur 5000 × 4000.
-- décroché 2000 × 1500.
-- surface attendue : 17 m².
-- rotation 90° : surface identique et boîte englobante inversée.
+### Test A — création d'une chute en L
+Source : 1000 × 600 mm.
+Découpe : rectangle 700 × 400 mm dans un angle.
 
-## U
-- extérieur 5000 × 4000.
-- ouverture 2000 × 1500, décalage 1500.
-- surface attendue : 17 m².
-- une ouverture qui touche un bord latéral est BLOQUANTE car elle ne constitue plus un U valide.
+Attendu :
+- aire restante exacte = 320 000 mm² ;
+- un seul reliquat physique ;
+- contour en L ;
+- au moins 6 sommets de contour ;
+- la chute n'est pas traitée comme un rectangle plein 1000 × 600.
 
-## T
-- extérieur 5000 × 4000.
-- barre 1200.
-- pied 1800, décalage 1600.
-- surface attendue : 11,04 m².
+### Test B — réemploi dans la branche d'un L
+Une pièce 300 × 600 mm doit rentrer dans la branche verticale du reliquat du test A.
 
-## Forme libre orthogonale
-- minimum 4 points.
-- contour fermé automatiquement.
-- tous les segments horizontaux ou verticaux.
-- aucun auto-croisement.
-- surface calculée par polygone exact.
-- diagonale => `CALPI-009 BLOQUANT`.
-- auto-croisement => `CALPI-008 BLOQUANT`.
+Attendu : placement accepté sans rotation.
 
-## Calepinage des formes complexes
-- la zone est découpée selon les vrais décrochements du polygone.
-- aucune approximation par rectangle englobant.
-- `CALPI-036` signale lorsque l'optimisation 2D des chutes d'encoche reste à développer.
+### Test C — rotation 90°
+Une pièce 600 × 300 mm doit pouvoir être placée dans cette même branche uniquement lorsque la rotation 90° est autorisée.
+
+Attendu : `rotationDeg = 90`.
+
+### Test D — scénario CALPI réel avec encoche
+Pièce en L : 1800 × 900 mm avec décroché 600 × 300 mm.
+Matériau : 1000 × 600 mm.
+
+Attendu :
+- surface couverte = surface de pièce ;
+- au moins une pièce posée avec encoche ;
+- au moins une chute 2D complexe créée ;
+- au moins une chute 2D complexe réellement réutilisée ;
+- `CALPI-036 = OK` ;
+- `CALPI-037 = OK` ;
+- aucune chute utilisée deux fois.
+
+## Commande
+
+`node tests.js`
+
+Résultat :
+
+`CALPI tests V0.3.0: OK`

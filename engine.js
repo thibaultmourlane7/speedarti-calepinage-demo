@@ -5,7 +5,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = '0.2.0';
+  const VERSION = '0.3.0';
   const EPS = 0.0001;
   const STATUSES = Object.freeze({
     OK: 'OK',
@@ -58,7 +58,8 @@
       edgeMode: String(raw.edgeMode || 'balanced'),
       minimumEdgeWidthMm: Number(raw.minimumEdgeWidthMm ?? 80),
       minimumReusableLengthMm: Number(raw.minimumReusableLengthMm ?? 300),
-      minimumReusableWidthMm: Number(raw.minimumReusableWidthMm ?? 80)
+      minimumReusableWidthMm: Number(raw.minimumReusableWidthMm ?? 80),
+      allowOffcutRotation: Boolean(raw.allowOffcutRotation ?? false)
     };
   }
 
@@ -503,305 +504,439 @@
     return bands;
   }
 
-  function createPlanner(input) {
-    let offcutSeq = 0;
-    let elementSeq = 0;
-    let pieceSeq = 0;
-    let cutCount = 0;
-    let newElementsOpened = 0;
-    let reusedOffcutCount = 0;
-    let lostAreaMm2 = 0;
-    const offcuts = [];
-    const pool = [];
-    const consumedOffcutIds = new Set();
+  function cleanCell(cell) {
+    return {
+      xMm: Number(cell.xMm), yMm: Number(cell.yMm),
+      widthMm: Number(cell.widthMm), heightMm: Number(cell.heightMm)
+    };
+  }
 
-    function nextOffcutId() { offcutSeq += 1; return `C${offcutSeq}`; }
-    function nextElementId() { elementSeq += 1; return `E${elementSeq}`; }
-    function nextPieceId() { pieceSeq += 1; return `P${pieceSeq}`; }
+  function cellArea(cell) {
+    return Math.max(0, cell.widthMm) * Math.max(0, cell.heightMm);
+  }
 
-    function registerLostArea(areaMm2) {
-      if (areaMm2 > 0) lostAreaMm2 += areaMm2;
-    }
+  function cellsArea(cells) {
+    return cells.reduce((sum, cell) => sum + cellArea(cell), 0);
+  }
 
-    function addOffcut(lengthMm, widthMm, origin, parentOffcutId) {
-      if (lengthMm <= EPS || widthMm <= EPS) return null;
-      const reusable = lengthMm >= input.minimumReusableLengthMm && widthMm >= input.minimumReusableWidthMm;
-      const item = {
-        id: nextOffcutId(), lengthMm, widthMm, origin,
-        parentOffcutId: parentOffcutId || null,
-        status: reusable ? 'available' : 'lost',
-        usedAt: null
-      };
-      offcuts.push(item);
-      if (reusable) pool.push(item);
-      else registerLostArea(lengthMm * widthMm);
-      return item;
-    }
+  function cellsBounds(cells) {
+    if (!cells.length) return { minXmm: 0, minYmm: 0, maxXmm: 0, maxYmm: 0, widthMm: 0, heightMm: 0 };
+    const minXmm = Math.min(...cells.map(c => c.xMm));
+    const minYmm = Math.min(...cells.map(c => c.yMm));
+    const maxXmm = Math.max(...cells.map(c => c.xMm + c.widthMm));
+    const maxYmm = Math.max(...cells.map(c => c.yMm + c.heightMm));
+    return { minXmm, minYmm, maxXmm, maxYmm, widthMm: maxXmm - minXmm, heightMm: maxYmm - minYmm };
+  }
 
-    function selectOffcut(targetLengthMm, targetWidthMm) {
-      const candidates = pool.filter(o => o.status === 'available' && o.lengthMm + EPS >= targetLengthMm && o.widthMm + EPS >= targetWidthMm);
-      candidates.sort((a, b) => {
-        const wasteA = (a.lengthMm * a.widthMm) - (targetLengthMm * targetWidthMm);
-        const wasteB = (b.lengthMm * b.widthMm) - (targetLengthMm * targetWidthMm);
-        if (Math.abs(wasteA - wasteB) > EPS) return wasteA - wasteB;
-        return a.lengthMm - b.lengthMm;
-      });
-      return candidates[0] || null;
-    }
+  function normalizeCells(cells) {
+    const valid = cells.map(cleanCell).filter(c => c.widthMm > EPS && c.heightMm > EPS);
+    if (!valid.length) return [];
+    const b = cellsBounds(valid);
+    return valid.map(c => ({ xMm: c.xMm - b.minXmm, yMm: c.yMm - b.minYmm, widthMm: c.widthMm, heightMm: c.heightMm }));
+  }
 
-    function consumeSource(source, targetLengthMm, targetWidthMm, placement) {
-      const sourceLengthMm = source.lengthMm;
-      const sourceWidthMm = source.widthMm;
-      const isOffcut = source.type === 'offcut';
-      const sourceId = source.id;
-
-      if (isOffcut) {
-        if (consumedOffcutIds.has(sourceId)) throw new Error(`Double usage interdit pour ${sourceId}`);
-        consumedOffcutIds.add(sourceId);
-        reusedOffcutCount += 1;
-        const poolItem = pool.find(o => o.id === sourceId);
-        if (poolItem) poolItem.status = 'used';
-        const history = offcuts.find(o => o.id === sourceId);
-        if (history) {
-          history.status = 'used';
-          history.usedAt = placement;
+  function mergeCells(rawCells) {
+    let cells = normalizeCells(rawCells);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      outer: for (let i = 0; i < cells.length; i += 1) {
+        for (let j = i + 1; j < cells.length; j += 1) {
+          const a = cells[i], b = cells[j];
+          const sameY = Math.abs(a.yMm - b.yMm) <= EPS && Math.abs(a.heightMm - b.heightMm) <= EPS;
+          const touchX = Math.abs((a.xMm + a.widthMm) - b.xMm) <= EPS || Math.abs((b.xMm + b.widthMm) - a.xMm) <= EPS;
+          if (sameY && touchX) {
+            const x1 = Math.min(a.xMm, b.xMm), x2 = Math.max(a.xMm + a.widthMm, b.xMm + b.widthMm);
+            cells.splice(j, 1); cells[i] = { xMm: x1, yMm: a.yMm, widthMm: x2 - x1, heightMm: a.heightMm };
+            changed = true; break outer;
+          }
+          const sameX = Math.abs(a.xMm - b.xMm) <= EPS && Math.abs(a.widthMm - b.widthMm) <= EPS;
+          const touchY = Math.abs((a.yMm + a.heightMm) - b.yMm) <= EPS || Math.abs((b.yMm + b.heightMm) - a.yMm) <= EPS;
+          if (sameX && touchY) {
+            const y1 = Math.min(a.yMm, b.yMm), y2 = Math.max(a.yMm + a.heightMm, b.yMm + b.heightMm);
+            cells.splice(j, 1); cells[i] = { xMm: a.xMm, yMm: y1, widthMm: a.widthMm, heightMm: y2 - y1 };
+            changed = true; break outer;
+          }
         }
-      } else {
-        newElementsOpened += 1;
       }
+    }
+    return normalizeCells(cells);
+  }
 
-      const lengthRemainder = sourceLengthMm - targetLengthMm;
-      const widthRemainder = sourceWidthMm - targetWidthMm;
-      const wasLengthCut = lengthRemainder > EPS;
-      const wasWidthCut = widthRemainder > EPS;
-      if (wasLengthCut) cutCount += 1;
-      if (wasWidthCut) cutCount += 1;
+  function rectIntersection(a, b) {
+    const x1 = Math.max(a.xMm, b.xMm), y1 = Math.max(a.yMm, b.yMm);
+    const x2 = Math.min(a.xMm + a.widthMm, b.xMm + b.widthMm);
+    const y2 = Math.min(a.yMm + a.heightMm, b.yMm + b.heightMm);
+    if (x2 - x1 <= EPS || y2 - y1 <= EPS) return null;
+    return { xMm: x1, yMm: y1, widthMm: x2 - x1, heightMm: y2 - y1 };
+  }
 
-      if (wasWidthCut) registerLostArea(targetLengthMm * widthRemainder);
+  function subtractRectFromCell(cell, cut) {
+    const i = rectIntersection(cell, cut);
+    if (!i) return [cleanCell(cell)];
+    const out = [];
+    const cx2 = cell.xMm + cell.widthMm, cy2 = cell.yMm + cell.heightMm;
+    const ix2 = i.xMm + i.widthMm, iy2 = i.yMm + i.heightMm;
+    if (i.xMm - cell.xMm > EPS) out.push({ xMm: cell.xMm, yMm: cell.yMm, widthMm: i.xMm - cell.xMm, heightMm: cell.heightMm });
+    if (cx2 - ix2 > EPS) out.push({ xMm: ix2, yMm: cell.yMm, widthMm: cx2 - ix2, heightMm: cell.heightMm });
+    if (i.yMm - cell.yMm > EPS) out.push({ xMm: i.xMm, yMm: cell.yMm, widthMm: i.widthMm, heightMm: i.yMm - cell.yMm });
+    if (cy2 - iy2 > EPS) out.push({ xMm: i.xMm, yMm: iy2, widthMm: i.widthMm, heightMm: cy2 - iy2 });
+    return out;
+  }
 
-      let produced = null;
-      if (wasLengthCut) {
-        produced = addOffcut(
-          lengthRemainder,
-          sourceWidthMm,
-          { sourceId, rowIndex: placement.rowIndex, pieceIndex: placement.pieceIndex },
-          isOffcut ? sourceId : null
-        );
+  function subtractShapeFromCells(sourceCells, cutCells) {
+    let cells = sourceCells.map(cleanCell);
+    cutCells.forEach(cut => {
+      const next = [];
+      cells.forEach(cell => next.push(...subtractRectFromCell(cell, cut)));
+      cells = next;
+    });
+    return mergeCells(cells);
+  }
+
+  function overlapArea(sourceCells, targetCells) {
+    let area = 0;
+    sourceCells.forEach(s => targetCells.forEach(t => {
+      const i = rectIntersection(s, t);
+      if (i) area += cellArea(i);
+    }));
+    return area;
+  }
+
+  function translateCells(cells, dx, dy) {
+    return cells.map(c => ({ xMm: c.xMm + dx, yMm: c.yMm + dy, widthMm: c.widthMm, heightMm: c.heightMm }));
+  }
+
+  function rotateCells90(cells) {
+    const b = cellsBounds(cells);
+    const rotated = cells.map(c => ({
+      xMm: b.heightMm - (c.yMm + c.heightMm),
+      yMm: c.xMm,
+      widthMm: c.heightMm,
+      heightMm: c.widthMm
+    }));
+    return mergeCells(rotated);
+  }
+
+  function cellsShareEdge(a, b) {
+    const verticalTouch = (Math.abs((a.xMm + a.widthMm) - b.xMm) <= EPS || Math.abs((b.xMm + b.widthMm) - a.xMm) <= EPS)
+      && Math.min(a.yMm + a.heightMm, b.yMm + b.heightMm) - Math.max(a.yMm, b.yMm) > EPS;
+    const horizontalTouch = (Math.abs((a.yMm + a.heightMm) - b.yMm) <= EPS || Math.abs((b.yMm + b.heightMm) - a.yMm) <= EPS)
+      && Math.min(a.xMm + a.widthMm, b.xMm + b.widthMm) - Math.max(a.xMm, b.xMm) > EPS;
+    return verticalTouch || horizontalTouch;
+  }
+
+  function groupConnectedCells(rawCells) {
+    const cells = mergeCells(rawCells);
+    const groups = [];
+    const seen = new Set();
+    for (let i = 0; i < cells.length; i += 1) {
+      if (seen.has(i)) continue;
+      const queue = [i], group = []; seen.add(i);
+      while (queue.length) {
+        const idx = queue.shift(); group.push(cells[idx]);
+        for (let j = 0; j < cells.length; j += 1) {
+          if (!seen.has(j) && cellsShareEdge(cells[idx], cells[j])) { seen.add(j); queue.push(j); }
+        }
       }
+      groups.push(mergeCells(group));
+    }
+    return groups;
+  }
 
-      return {
-        pieceId: nextPieceId(),
-        sourceType: isOffcut ? 'offcut' : 'new',
-        sourceId,
-        lengthMm: targetLengthMm,
-        widthMm: targetWidthMm,
-        lengthCut: wasLengthCut,
-        widthCut: wasWidthCut,
-        producedOffcutId: produced ? produced.id : null,
-        rowIndex: placement.rowIndex,
-        pieceIndex: placement.pieceIndex,
-        bandIndex: placement.bandIndex
-      };
+  function keyNum(v) { return Math.round(v * 1000000) / 1000000; }
+  function pointKey(x, y) { return `${keyNum(x)},${keyNum(y)}`; }
+
+  function simplifyContour(points) {
+    if (points.length < 3) return points;
+    const out = [];
+    for (let i = 0; i < points.length; i += 1) {
+      const prev = points[(i - 1 + points.length) % points.length];
+      const cur = points[i];
+      const next = points[(i + 1) % points.length];
+      const collinear = (Math.abs(prev.xMm - cur.xMm) <= EPS && Math.abs(cur.xMm - next.xMm) <= EPS)
+        || (Math.abs(prev.yMm - cur.yMm) <= EPS && Math.abs(cur.yMm - next.yMm) <= EPS);
+      if (!collinear) out.push(cur);
+    }
+    return out;
+  }
+
+  function cellsToContours(rawCells) {
+    const cells = mergeCells(rawCells);
+    if (!cells.length) return [];
+    const xs = Array.from(new Set(cells.flatMap(c => [keyNum(c.xMm), keyNum(c.xMm + c.widthMm)]))).sort((a,b)=>a-b);
+    const ys = Array.from(new Set(cells.flatMap(c => [keyNum(c.yMm), keyNum(c.yMm + c.heightMm)]))).sort((a,b)=>a-b);
+    const occupied = new Set();
+    for (let i = 0; i < xs.length - 1; i += 1) for (let j = 0; j < ys.length - 1; j += 1) {
+      const mx = (xs[i] + xs[i+1]) / 2, my = (ys[j] + ys[j+1]) / 2;
+      if (cells.some(c => mx > c.xMm - EPS && mx < c.xMm + c.widthMm + EPS && my > c.yMm - EPS && my < c.yMm + c.heightMm + EPS)) occupied.add(`${i}:${j}`);
+    }
+    const edges = [];
+    const add = (x1,y1,x2,y2) => edges.push({a:{xMm:x1,yMm:y1},b:{xMm:x2,yMm:y2}});
+    for (let i = 0; i < xs.length - 1; i += 1) for (let j = 0; j < ys.length - 1; j += 1) {
+      if (!occupied.has(`${i}:${j}`)) continue;
+      if (!occupied.has(`${i}:${j-1}`)) add(xs[i],ys[j],xs[i+1],ys[j]);
+      if (!occupied.has(`${i+1}:${j}`)) add(xs[i+1],ys[j],xs[i+1],ys[j+1]);
+      if (!occupied.has(`${i}:${j+1}`)) add(xs[i+1],ys[j+1],xs[i],ys[j+1]);
+      if (!occupied.has(`${i-1}:${j}`)) add(xs[i],ys[j+1],xs[i],ys[j]);
+    }
+    const byStart = new Map();
+    edges.forEach((e,idx) => { const k=pointKey(e.a.xMm,e.a.yMm); if(!byStart.has(k))byStart.set(k,[]); byStart.get(k).push(idx); });
+    const used = new Set(), loops=[];
+    for (let startIdx=0; startIdx<edges.length; startIdx+=1) {
+      if (used.has(startIdx)) continue;
+      const loop=[]; let idx=startIdx; let guard=0;
+      while (!used.has(idx) && guard < edges.length + 5) {
+        guard += 1; const e=edges[idx]; used.add(idx); loop.push(e.a);
+        const nextKey=pointKey(e.b.xMm,e.b.yMm);
+        const candidates=(byStart.get(nextKey)||[]).filter(n=>!used.has(n));
+        if (!candidates.length) { if (pointKey(e.b.xMm,e.b.yMm)!==pointKey(loop[0].xMm,loop[0].yMm)) loop.push(e.b); break; }
+        idx=candidates[0];
+      }
+      if (loop.length >= 4) loops.push(simplifyContour(loop));
+    }
+    return loops;
+  }
+
+  function canPlaceShape(sourceCells, targetCells) {
+    return Math.abs(overlapArea(sourceCells, targetCells) - cellsArea(targetCells)) <= Math.max(EPS, cellsArea(targetCells) * 1e-9);
+  }
+
+  function candidateTranslations(sourceCells, targetCells) {
+    const sx = sourceCells.flatMap(c => [c.xMm, c.xMm + c.widthMm]);
+    const sy = sourceCells.flatMap(c => [c.yMm, c.yMm + c.heightMm]);
+    const tx = targetCells.flatMap(c => [c.xMm, c.xMm + c.widthMm]);
+    const ty = targetCells.flatMap(c => [c.yMm, c.yMm + c.heightMm]);
+    const dxs = Array.from(new Set(sx.flatMap(s => tx.map(t => keyNum(s - t)))));
+    const dys = Array.from(new Set(sy.flatMap(s => ty.map(t => keyNum(s - t)))));
+    const out=[];
+    dxs.forEach(dx=>dys.forEach(dy=>out.push({dx,dy})));
+    return out;
+  }
+
+  function canFitMinimum(cells, minLengthMm, minWidthMm, allowRotation) {
+    const tests = [{w:minLengthMm,h:minWidthMm,rot:0}];
+    if (allowRotation && Math.abs(minLengthMm-minWidthMm)>EPS) tests.push({w:minWidthMm,h:minLengthMm,rot:90});
+    for (const t of tests) {
+      const target=[{xMm:0,yMm:0,widthMm:t.w,heightMm:t.h}];
+      const trans=candidateTranslations(cells,target);
+      if (trans.some(p=>canPlaceShape(cells,translateCells(target,p.dx,p.dy)))) return true;
+    }
+    return false;
+  }
+
+  function analyzeRemainder(remainingCells, input) {
+    const components = groupConnectedCells(remainingCells);
+    let lostAreaMm2 = 0;
+    let reusableAreaMm2 = 0;
+    components.forEach(comp => {
+      const area = cellsArea(comp);
+      if (canFitMinimum(comp, input.minimumReusableLengthMm, input.minimumReusableWidthMm, input.allowOffcutRotation)) reusableAreaMm2 += area;
+      else lostAreaMm2 += area;
+    });
+    return { components, lostAreaMm2, reusableAreaMm2 };
+  }
+
+  function findBestPlacement(sourceCellsRaw, targetCellsRaw, input, allowRotation) {
+    const sourceCells = mergeCells(sourceCellsRaw);
+    const baseTarget = mergeCells(targetCellsRaw);
+    const variants=[{cells:baseTarget,rotationDeg:0}];
+    if (allowRotation) variants.push({cells:rotateCells90(baseTarget),rotationDeg:90});
+    let best=null;
+    variants.forEach(variant => {
+      candidateTranslations(sourceCells,variant.cells).forEach(pos => {
+        const placed=translateCells(variant.cells,pos.dx,pos.dy);
+        if (!canPlaceShape(sourceCells,placed)) return;
+        const remaining=subtractShapeFromCells(sourceCells,placed);
+        const analysis=analyzeRemainder(remaining,input);
+        const candidate={placedTargetCells:placed,remainingCells:remaining,remainderComponents:analysis.components,lostAreaMm2:analysis.lostAreaMm2,reusableAreaMm2:analysis.reusableAreaMm2,rotationDeg:variant.rotationDeg,dx:pos.dx,dy:pos.dy,sourceAreaMm2:cellsArea(sourceCells),targetAreaMm2:cellsArea(variant.cells)};
+        if (!best) { best=candidate; return; }
+        const a=[candidate.lostAreaMm2, candidate.remainderComponents.length, candidate.sourceAreaMm2-candidate.targetAreaMm2, candidate.rotationDeg===0?0:1, candidate.dy, candidate.dx];
+        const b=[best.lostAreaMm2, best.remainderComponents.length, best.sourceAreaMm2-best.targetAreaMm2, best.rotationDeg===0?0:1, best.dy, best.dx];
+        for(let i=0;i<a.length;i+=1){ if(a[i]<b[i]-EPS){best=candidate;break;} if(a[i]>b[i]+EPS)break; }
+      });
+    });
+    return best;
+  }
+
+  function createPlanner(input) {
+    let offcutSeq=0, elementSeq=0, pieceSeq=0, cutCount=0, newElementsOpened=0, reusedOffcutCount=0, lostAreaMm2=0;
+    let complexOffcutsCreated=0, twoDReuseCount=0, rotatedOffcutReuseCount=0;
+    const offcuts=[], pool=[], consumedOffcutIds=new Set();
+
+    function nextOffcutId(){offcutSeq+=1;return `C${offcutSeq}`;}
+    function nextElementId(){elementSeq+=1;return `E${elementSeq}`;}
+    function nextPieceId(){pieceSeq+=1;return `P${pieceSeq}`;}
+    function registerLostArea(area){if(area>EPS)lostAreaMm2+=area;}
+
+    function addOffcutRegion(regionCells, origin, parentOffcutId) {
+      const cells=mergeCells(regionCells); if(!cells.length)return null;
+      const areaMm2=cellsArea(cells), b=cellsBounds(cells);
+      const reusable=canFitMinimum(cells,input.minimumReusableLengthMm,input.minimumReusableWidthMm,input.allowOffcutRotation);
+      const contours=cellsToContours(cells);
+      const shapeType=cells.length===1?'rectangle':'orthogonal';
+      if(shapeType==='orthogonal')complexOffcutsCreated+=1;
+      const item={id:nextOffcutId(),lengthMm:b.widthMm,widthMm:b.heightMm,areaMm2,shapeType,cells,contours,contourPoints:contours[0]||[],origin,parentOffcutId:parentOffcutId||null,status:reusable?'available':'lost',usedAt:null};
+      offcuts.push(item); if(reusable)pool.push(item); else registerLostArea(areaMm2); return item;
     }
 
-    function allocate(targetLengthMm, targetWidthMm, placement) {
-      const candidate = selectOffcut(targetLengthMm, targetWidthMm);
-      if (candidate) {
-        return consumeSource({ type: 'offcut', id: candidate.id, lengthMm: candidate.lengthMm, widthMm: candidate.widthMm }, targetLengthMm, targetWidthMm, placement);
-      }
-      return consumeSource({ type: 'new', id: nextElementId(), lengthMm: input.materialLengthMm, widthMm: input.materialWidthMm }, targetLengthMm, targetWidthMm, placement);
+    function selectOffcut(targetCells) {
+      const candidates=[];
+      pool.filter(o=>o.status==='available').forEach(item=>{
+        const placement=findBestPlacement(item.cells,targetCells,input,input.allowOffcutRotation);
+        if(placement)candidates.push({item,placement});
+      });
+      candidates.sort((a,b)=>{
+        const av=[a.placement.lostAreaMm2,a.item.areaMm2-a.placement.targetAreaMm2,a.placement.remainderComponents.length,a.placement.rotationDeg===0?0:1];
+        const bv=[b.placement.lostAreaMm2,b.item.areaMm2-b.placement.targetAreaMm2,b.placement.remainderComponents.length,b.placement.rotationDeg===0?0:1];
+        for(let i=0;i<av.length;i+=1){if(Math.abs(av[i]-bv[i])>EPS)return av[i]-bv[i];}return 0;
+      });
+      return candidates[0]||null;
+    }
+
+    function consume(source, placement, targetCells, meta) {
+      const isOffcut=source.type==='offcut', sourceId=source.id;
+      if(isOffcut){
+        if(consumedOffcutIds.has(sourceId))throw new Error(`Double usage interdit pour ${sourceId}`);
+        consumedOffcutIds.add(sourceId); reusedOffcutCount+=1;
+        const history=offcuts.find(o=>o.id===sourceId); if(history){history.status='used';history.usedAt=meta;}
+        if(source.shapeType==='orthogonal'||targetCells.length>1)twoDReuseCount+=1;
+        if(placement.rotationDeg===90)rotatedOffcutReuseCount+=1;
+      } else newElementsOpened+=1;
+
+      const targetContours=cellsToContours(placement.placedTargetCells);
+      cutCount += targetContours.reduce((sum,loop)=>sum+loop.length,0);
+      const produced=[];
+      placement.remainderComponents.forEach(comp=>{
+        const item=addOffcutRegion(comp,{sourceId,rowIndex:meta.rowIndex,pieceIndex:meta.pieceIndex,gridCellIndex:meta.gridCellIndex},isOffcut?sourceId:null);
+        if(item)produced.push(item.id);
+      });
+      const targetBounds=cellsBounds(targetCells);
+      return {pieceId:nextPieceId(),sourceType:isOffcut?'offcut':'new',sourceId,lengthMm:targetBounds.widthMm,widthMm:targetBounds.heightMm,shapeType:targetCells.length===1?'rectangle':'orthogonal',shapeCells:mergeCells(targetCells),shapeContours:cellsToContours(targetCells),sourcePlacementCells:placement.placedTargetCells,sourceRotationDeg:placement.rotationDeg,producedOffcutIds:produced,producedOffcutId:produced[0]||null,rowIndex:meta.rowIndex,pieceIndex:meta.pieceIndex,gridCellIndex:meta.gridCellIndex};
+    }
+
+    function allocateShape(targetCellsRaw, meta) {
+      const targetCells=mergeCells(targetCellsRaw);
+      const candidate=selectOffcut(targetCells);
+      if(candidate)return consume({type:'offcut',id:candidate.item.id,cells:candidate.item.cells,shapeType:candidate.item.shapeType},candidate.placement,targetCells,meta);
+      const sourceCells=[{xMm:0,yMm:0,widthMm:input.materialLengthMm,heightMm:input.materialWidthMm}];
+      const placement=findBestPlacement(sourceCells,targetCells,input,false);
+      if(!placement)throw new Error(`La pièce ${meta.rowIndex+1}/${meta.gridCellIndex+1} ne rentre pas dans un élément neuf ${input.materialLengthMm}×${input.materialWidthMm} mm.`);
+      return consume({type:'new',id:nextElementId(),cells:sourceCells,shapeType:'rectangle'},placement,targetCells,meta);
     }
 
     return {
-      allocate,
+      allocateShape,
       snapshot() {
         return {
-          offcuts: offcuts.map(o => ({ ...o })),
-          availableOffcuts: pool.filter(o => o.status === 'available').map(o => ({ ...o })),
+          offcuts: offcuts.map(o => ({
+            ...o,
+            cells: o.cells.map(c => ({ ...c })),
+            contours: o.contours.map(loop => loop.map(p => ({ ...p })))
+          })),
+          availableOffcuts: pool.filter(o => o.status === 'available').map(o => ({
+            ...o,
+            cells: o.cells.map(c => ({ ...c }))
+          })),
           newElementsOpened,
           reusedOffcutCount,
           cutCount,
           lostAreaMm2,
-          consumedOffcutIds: Array.from(consumedOffcutIds)
+          consumedOffcutIds: Array.from(consumedOffcutIds),
+          complexOffcutsCreated,
+          twoDReuseCount,
+          rotatedOffcutReuseCount
         };
       }
     };
   }
 
-  function roomRectForPiece(piece, orientation) {
-    if (orientation === 'lengthwise') {
-      return {
-        roomXmm: piece.xMm,
-        roomYmm: piece.yMm,
-        roomWidthMm: piece.lengthMm,
-        roomHeightMm: piece.widthMm
-      };
-    }
-    return {
-      roomXmm: piece.yMm,
-      roomYmm: piece.xMm,
-      roomWidthMm: piece.widthMm,
-      roomHeightMm: piece.lengthMm
-    };
+  function layoutCellToRoomCell(cell, orientation) {
+    if (orientation === 'lengthwise') return { roomXmm: cell.xMm, roomYmm: cell.yMm, roomWidthMm: cell.widthMm, roomHeightMm: cell.heightMm };
+    return { roomXmm: cell.yMm, roomYmm: cell.xMm, roomWidthMm: cell.heightMm, roomHeightMm: cell.widthMm };
   }
 
   function calculate(rawInput) {
-    const input = normalizeInput(rawInput || {});
-    const geometry = buildRoomGeometry(input);
-    const controls = validateInput(input);
-    if (hasBlocking(controls)) {
-      controls.push(control('CALPI-041', STATUSES.BLOCKING, 'Sortie finale interdite tant qu’un contrôle bloquant subsiste.'));
-      return { engineVersion: VERSION, status: STATUSES.BLOCKING, input, controls, roomPolygon: geometry.points || [], rows: [], poseSequence: [] };
-    }
+    const input=normalizeInput(rawInput||{}), geometry=buildRoomGeometry(input), controls=validateInput(input);
+    if(hasBlocking(controls)){controls.push(control('CALPI-041',STATUSES.BLOCKING,'Sortie finale interdite tant qu’un contrôle bloquant subsiste.'));return {engineVersion:VERSION,status:STATUSES.BLOCKING,input,controls,roomPolygon:geometry.points||[],rows:[],poseSequence:[]};}
 
-    const layoutPolygon = layoutPolygonFor(geometry.points, input.orientation);
-    const lb = layoutBounds(layoutPolygon);
-    const axes = { runLengthMm: lb.runLengthMm, fieldWidthMm: lb.fieldWidthMm };
-    const rowCalc = calculateRows(axes.fieldWidthMm, input.materialWidthMm, input.jointWidthMm, input.edgeMode, input.minimumEdgeWidthMm);
-    controls.push(control('CALPI-010', STATUSES.OK, `${rowCalc.rowCount} rangée(s) de grille calculée(s).`));
-    controls.push(rowCalc.lastRowWidthMm > 0
-      ? control('CALPI-011', STATUSES.OK, 'Dernière rive géométriquement valide.')
-      : control('CALPI-011', STATUSES.BLOCKING, 'Dernière rive invalide.'));
+    const layoutPolygon=layoutPolygonFor(geometry.points,input.orientation), lb=layoutBounds(layoutPolygon);
+    const axes={runLengthMm:lb.runLengthMm,fieldWidthMm:lb.fieldWidthMm};
+    const rowCalc=calculateRows(axes.fieldWidthMm,input.materialWidthMm,input.jointWidthMm,input.edgeMode,input.minimumEdgeWidthMm);
+    controls.push(control('CALPI-010',STATUSES.OK,`${rowCalc.rowCount} rangée(s) de grille calculée(s).`));
+    controls.push(rowCalc.lastRowWidthMm>0?control('CALPI-011',STATUSES.OK,'Dernière rive géométriquement valide.'):control('CALPI-011',STATUSES.BLOCKING,'Dernière rive invalide.'));
+    controls.push(control('CALPI-013',STATUSES.OK,rowCalc.balanced?'Première et dernière rive équilibrées automatiquement.':'Aucun équilibrage automatique appliqué.'));
+    const edgeMin=Math.min(rowCalc.firstRowWidthMm,rowCalc.lastRowWidthMm);
+    controls.push(edgeMin+EPS>=input.minimumEdgeWidthMm?control('CALPI-014',STATUSES.OK,'Largeur minimale de rive respectée.',{minimumObservedMm:edgeMin}):control('CALPI-014',input.edgeMode==='balanced'?STATUSES.WARNING:STATUSES.VALIDATE,'Une rive reste inférieure au minimum demandé.',{minimumObservedMm:edgeMin,requestedMm:input.minimumEdgeWidthMm}));
+    if(hasBlocking(controls)){controls.push(control('CALPI-041',STATUSES.BLOCKING,'Sortie finale interdite.'));return {engineVersion:VERSION,status:STATUSES.BLOCKING,input,controls,roomPolygon:geometry.points,rows:[],poseSequence:[]};}
 
-    if (rowCalc.balanced) controls.push(control('CALPI-013', STATUSES.OK, 'Première et dernière rive équilibrées automatiquement.'));
-    else controls.push(control('CALPI-013', STATUSES.OK, 'Aucun équilibrage automatique appliqué.'));
-
-    const edgeMin = Math.min(rowCalc.firstRowWidthMm, rowCalc.lastRowWidthMm);
-    controls.push(edgeMin + EPS >= input.minimumEdgeWidthMm
-      ? control('CALPI-014', STATUSES.OK, 'Largeur minimale de rive respectée.', { minimumObservedMm: edgeMin })
-      : control('CALPI-014', input.edgeMode === 'balanced' ? STATUSES.WARNING : STATUSES.VALIDATE, 'Une rive reste inférieure au minimum demandé.', { minimumObservedMm: edgeMin, requestedMm: input.minimumEdgeWidthMm }));
-
-    if (hasBlocking(controls)) {
-      controls.push(control('CALPI-041', STATUSES.BLOCKING, 'Sortie finale interdite.'));
-      return { engineVersion: VERSION, status: STATUSES.BLOCKING, input, controls, roomPolygon: geometry.points, rows: [], poseSequence: [] };
-    }
-
-    const planner = createPlanner(input);
-    const rows = [];
-    const poseSequence = [];
-    let yMm = 0;
-    let materialCoveredAreaMm2 = 0;
-    let geometrySplitBandCount = 0;
-
-    for (let rowIndex = 0; rowIndex < rowCalc.rowCount; rowIndex += 1) {
-      const rowWidthMm = rowCalc.rowWidthsMm[rowIndex];
-      const rowStartV = yMm;
-      const rowEndV = yMm + rowWidthMm;
-      const starterLengthMm = starterLengthFor(input.pattern, rowIndex, input.materialLengthMm);
-      const gridCells = buildGridCells(axes.runLengthMm, input.materialLengthMm, input.jointWidthMm, starterLengthMm);
-      const bands = splitRowIntoBands(layoutPolygon, rowStartV, rowEndV);
-      const pieces = [];
-
-      bands.forEach((band, bandIndex) => {
-        if (band.widthMm < rowWidthMm - EPS) geometrySplitBandCount += 1;
-        let pieceIndexInBand = 0;
-        band.intervals.forEach(interval => {
-          const intervalStart = interval[0];
-          const intervalEnd = interval[1];
-          gridCells.forEach(cell => {
-            const start = Math.max(intervalStart, cell.startMm);
-            const end = Math.min(intervalEnd, cell.endMm);
-            const lengthMm = end - start;
-            if (lengthMm <= EPS) return;
-            const piece = planner.allocate(lengthMm, band.widthMm, { rowIndex, pieceIndex: pieceIndexInBand, bandIndex });
-            piece.xMm = start;
-            piece.yMm = band.startVmm;
-            piece.gridCellIndex = cell.index;
-            piece.intervalStartMm = intervalStart;
-            piece.intervalEndMm = intervalEnd;
-            Object.assign(piece, roomRectForPiece(piece, input.orientation));
-            pieces.push(piece);
-            materialCoveredAreaMm2 += piece.lengthMm * piece.widthMm;
-            poseSequence.push({
-              step: poseSequence.length + 1,
-              row: rowIndex + 1,
-              band: bandIndex + 1,
-              piece: pieceIndexInBand + 1,
-              pieceId: piece.pieceId,
-              action: piece.sourceType === 'offcut' ? `Réutiliser ${piece.sourceId}` : `Ouvrir ${piece.sourceId}`,
-              lengthMm: piece.lengthMm,
-              widthMm: piece.widthMm,
-              producedOffcutId: piece.producedOffcutId
-            });
-            pieceIndexInBand += 1;
+    const planner=createPlanner(input), rows=[], poseSequence=[];
+    let yMm=0, materialCoveredAreaMm2=0, geometrySplitBandCount=0, complexInstalledPieceCount=0;
+    try {
+      for(let rowIndex=0;rowIndex<rowCalc.rowCount;rowIndex+=1){
+        const rowWidthMm=rowCalc.rowWidthsMm[rowIndex], rowStartV=yMm, rowEndV=yMm+rowWidthMm;
+        const starterLengthMm=starterLengthFor(input.pattern,rowIndex,input.materialLengthMm);
+        const gridCells=buildGridCells(axes.runLengthMm,input.materialLengthMm,input.jointWidthMm,starterLengthMm);
+        const bands=splitRowIntoBands(layoutPolygon,rowStartV,rowEndV), fragmentsByGrid=new Map();
+        bands.forEach((band,bandIndex)=>{
+          if(band.widthMm<rowWidthMm-EPS)geometrySplitBandCount+=1;
+          band.intervals.forEach(interval=>gridCells.forEach(cell=>{
+            const start=Math.max(interval[0],cell.startMm), end=Math.min(interval[1],cell.endMm), length=end-start;
+            if(length<=EPS)return;
+            const fragment={xMm:start,yMm:band.startVmm,widthMm:length,heightMm:band.widthMm,bandIndex};
+            if(!fragmentsByGrid.has(cell.index))fragmentsByGrid.set(cell.index,[]);
+            fragmentsByGrid.get(cell.index).push(fragment);
+          }));
+        });
+        const pieces=[]; let pieceIndex=0;
+        Array.from(fragmentsByGrid.keys()).sort((a,b)=>a-b).forEach(gridCellIndex=>{
+          const fragments=fragmentsByGrid.get(gridCellIndex).map(f=>({xMm:f.xMm,yMm:f.yMm,widthMm:f.widthMm,heightMm:f.heightMm}));
+          const components=groupConnectedCells(fragments);
+          components.forEach(componentAbs=>{
+            const absBounds=cellsBounds(componentAbs), targetCells=normalizeCells(componentAbs);
+            const piece=planner.allocateShape(targetCells,{rowIndex,pieceIndex,gridCellIndex});
+            piece.xMm=absBounds.minXmm; piece.yMm=absBounds.minYmm;
+            piece.layoutCells=componentAbs.map(c=>({...c}));
+            piece.roomCells=componentAbs.map(c=>layoutCellToRoomCell(c,input.orientation));
+            piece.roomContours=[];
+            if(piece.shapeType==='orthogonal')complexInstalledPieceCount+=1;
+            pieces.push(piece); materialCoveredAreaMm2+=cellsArea(componentAbs);
+            const producedText=piece.producedOffcutIds.length?` · conserver ${piece.producedOffcutIds.join(', ')}`:'';
+            poseSequence.push({step:poseSequence.length+1,row:rowIndex+1,piece:pieceIndex+1,pieceId:piece.pieceId,gridCellIndex,action:piece.sourceType==='offcut'?`Réutiliser ${piece.sourceId}${piece.sourceRotationDeg===90?' tourné à 90°':''}`:`Ouvrir ${piece.sourceId}`,lengthMm:piece.lengthMm,widthMm:piece.widthMm,shapeType:piece.shapeType,sourceRotationDeg:piece.sourceRotationDeg,producedOffcutId:piece.producedOffcutId,producedOffcutIds:piece.producedOffcutIds,note:producedText});
+            pieceIndex+=1;
           });
         });
-      });
-
-      rows.push({
-        rowIndex,
-        rowNumber: rowIndex + 1,
-        widthMm: rowWidthMm,
-        yMm,
-        starterLengthMm,
-        bands,
-        pieces
-      });
-      yMm += rowWidthMm + (rowIndex < rowCalc.rowCount - 1 ? input.jointWidthMm : 0);
+        rows.push({rowIndex,rowNumber:rowIndex+1,widthMm:rowWidthMm,yMm,starterLengthMm,bands,pieces});
+        yMm+=rowWidthMm+(rowIndex<rowCalc.rowCount-1?input.jointWidthMm:0);
+      }
+    } catch(err) {
+      controls.push(control('CALPI-023',STATUSES.BLOCKING,'Une pièce géométrique ne peut pas être découpée dans le format matériau sélectionné.',{error:String(err.message||err)}));
+      controls.push(control('CALPI-041',STATUSES.BLOCKING,'Sortie finale interdite.'));
+      return {engineVersion:VERSION,status:STATUSES.BLOCKING,input,controls,roomPolygon:geometry.points,roomBounds:geometry.bounds,roomAreaMm2:geometry.areaMm2,rows:[],poseSequence:[]};
     }
 
-    const stats = planner.snapshot();
-    controls.push(control('CALPI-017', STATUSES.OK, 'Zone de pose découpée en bandes orthogonales exactes.', { geometrySplitBandCount }));
-    if (geometrySplitBandCount > 0) {
-      controls.push(control('CALPI-036', STATUSES.WARNING, 'La géométrie est exacte, mais les bandes créées aux décrochements sont optimisées comme fragments rectangulaires. Les chutes issues de découpes en encoche ne sont pas encore optimisées en 2D.', { geometrySplitBandCount }));
-    } else {
-      controls.push(control('CALPI-036', STATUSES.OK, 'Aucune découpe géométrique complexe nécessitant une optimisation 2D supplémentaire.'));
-    }
-    controls.push(control('CALPI-021', STATUSES.OK, 'Décalages de départ générés selon le motif choisi.'));
-    controls.push(control('CALPI-022', STATUSES.OK, 'Ordre de pose généré.'));
-    controls.push(control('CALPI-031', STATUSES.OK, 'Le stock de chutes est interrogé avant chaque ouverture d’un élément neuf.'));
-    controls.push(control('CALPI-032', STATUSES.OK, 'Traçabilité origine → réemploi enregistrée.'));
-    controls.push(control('CALPI-033', STATUSES.OK, 'Contrôle anti-double-usage actif.'));
-    controls.push(control('CALPI-034', STATUSES.OK, 'Les reliquats de réemploi sont reclassés automatiquement.'));
-    controls.push(control('CALPI-035', STATUSES.OK, 'Matière perdue identifiée par le moteur.'));
-    controls.push(control('CALPI-040', STATUSES.OK, 'Résultat CALPI complet généré.'));
-
-    const worst = controls.some(c => c.status === STATUSES.VALIDATE) ? STATUSES.VALIDATE
-      : controls.some(c => c.status === STATUSES.WARNING) ? STATUSES.WARNING
-      : STATUSES.OK;
-
-    return {
-      engineVersion: VERSION,
-      status: worst,
-      input,
-      controls,
-      roomPolygon: geometry.points,
-      roomBounds: geometry.bounds,
-      roomAreaMm2: geometry.areaMm2,
-      axes,
-      firstRowWidthMm: rowCalc.firstRowWidthMm,
-      lastRowWidthMm: rowCalc.lastRowWidthMm,
-      balancedEdges: rowCalc.balanced,
-      rowCount: rowCalc.rowCount,
-      rows,
-      poseSequence,
-      offcuts: stats.offcuts,
-      availableOffcuts: stats.availableOffcuts,
-      newElementsOpened: stats.newElementsOpened,
-      reusedOffcutCount: stats.reusedOffcutCount,
-      cutCount: stats.cutCount,
-      lostAreaMm2: stats.lostAreaMm2,
-      installedAreaMm2: geometry.areaMm2,
-      materialCoveredAreaMm2,
-      geometrySplitBandCount
-    };
+    const stats=planner.snapshot();
+    controls.push(control('CALPI-017',STATUSES.OK,'Zone de pose découpée en cellules orthogonales exactes.',{geometrySplitBandCount,complexInstalledPieceCount}));
+    controls.push(control('CALPI-036',STATUSES.OK,'Optimisation 2D active : les chutes complexes sont conservées sous forme de régions orthogonales exactes et testées avant ouverture d’un élément neuf.',{complexOffcutsCreated:stats.complexOffcutsCreated,twoDReuseCount:stats.twoDReuseCount}));
+    controls.push(control('CALPI-037',STATUSES.OK,'Contour réel et aire exacte de chaque chute 2D enregistrés.'));
+    controls.push(control('CALPI-038',STATUSES.OK,input.allowOffcutRotation?'Rotation 90° des chutes autorisée et testée.':'Rotation 90° des chutes interdite par le réglage utilisateur.',{rotatedOffcutReuseCount:stats.rotatedOffcutReuseCount}));
+    controls.push(control('CALPI-039',STATUSES.OK,'Les reliquats 2D sont scindés en composantes physiques distinctes et reclassés individuellement.'));
+    controls.push(control('CALPI-021',STATUSES.OK,'Décalages de départ générés selon le motif choisi.'));
+    controls.push(control('CALPI-022',STATUSES.OK,'Ordre de pose généré.'));
+    controls.push(control('CALPI-031',STATUSES.OK,'Le stock de chutes 2D est interrogé avant chaque ouverture d’un élément neuf.'));
+    controls.push(control('CALPI-032',STATUSES.OK,'Traçabilité origine → réemploi enregistrée.'));
+    controls.push(control('CALPI-033',STATUSES.OK,'Contrôle anti-double-usage actif.'));
+    controls.push(control('CALPI-034',STATUSES.OK,'Les reliquats de réemploi sont recalculés géométriquement et reclassés automatiquement.'));
+    controls.push(control('CALPI-035',STATUSES.OK,'Matière perdue identifiée par aire géométrique exacte.'));
+    controls.push(control('CALPI-040',STATUSES.OK,'Résultat CALPI complet généré.'));
+    const worst=controls.some(c=>c.status===STATUSES.VALIDATE)?STATUSES.VALIDATE:controls.some(c=>c.status===STATUSES.WARNING)?STATUSES.WARNING:STATUSES.OK;
+    return {engineVersion:VERSION,status:worst,input,controls,roomPolygon:geometry.points,roomBounds:geometry.bounds,roomAreaMm2:geometry.areaMm2,axes,firstRowWidthMm:rowCalc.firstRowWidthMm,lastRowWidthMm:rowCalc.lastRowWidthMm,balancedEdges:rowCalc.balanced,rowCount:rowCalc.rowCount,rows,poseSequence,offcuts:stats.offcuts,availableOffcuts:stats.availableOffcuts,newElementsOpened:stats.newElementsOpened,reusedOffcutCount:stats.reusedOffcutCount,cutCount:stats.cutCount,lostAreaMm2:stats.lostAreaMm2,installedAreaMm2:geometry.areaMm2,materialCoveredAreaMm2,geometrySplitBandCount,complexInstalledPieceCount,complexOffcutsCreated:stats.complexOffcutsCreated,twoDReuseCount:stats.twoDReuseCount,rotatedOffcutReuseCount:stats.rotatedOffcutReuseCount};
   }
 
   return {
-    VERSION,
-    STATUSES,
-    SUPPORTED_MATERIALS,
-    SUPPORTED_PATTERNS,
-    SUPPORTED_ORIENTATIONS,
-    SUPPORTED_SHAPES,
-    SUPPORTED_ROTATIONS,
-    normalizeInput,
-    validateInput,
-    buildRoomGeometry,
-    calculateRows,
-    starterLengthFor,
-    buildTargets,
-    scanlineIntervals,
-    calculate
+    VERSION,STATUSES,SUPPORTED_MATERIALS,SUPPORTED_PATTERNS,SUPPORTED_ORIENTATIONS,SUPPORTED_SHAPES,SUPPORTED_ROTATIONS,
+    normalizeInput,validateInput,buildRoomGeometry,calculateRows,starterLengthFor,buildTargets,scanlineIntervals,calculate,
+    __test:{mergeCells,cellsArea,cellsBounds,normalizeCells,subtractShapeFromCells,groupConnectedCells,cellsToContours,findBestPlacement,rotateCells90,canPlaceShape}
   };
+
 });
