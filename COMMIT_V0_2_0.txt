@@ -1,0 +1,11 @@
+feat(calpi): développer L U T et forme libre orthogonale V0.2.0
+
+- ajoute les formes rectangle, L, U, T et libre orthogonale
+- ajoute les rotations 0/90/180/270
+- ajoute les dimensions guidées selon la forme
+- ajoute un éditeur de points exacts pour la forme libre
+- interdit diagonales et auto-croisements
+- calcule la surface exacte du polygone
+- génère le calepinage sur la géométrie réelle sans approximation rectangle
+- conserve les cycles 1/2 et 1/3 et la gestion des chutes
+- ajoute CALPI-006 à 009, CALPI-015 à 019 et CALPI-036

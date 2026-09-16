@@ -1,14 +1,12 @@
-# Publication de la démo CALPI sur GitHub Pages
+# Déploiement GitHub Pages — CALPI V0.2.0
 
-1. Déposer tous les fichiers de ce dossier à la racine du dépôt :
-   `thibaultmourlane7/speedarti-calepinage-demo`
-2. Vérifier que `index.html` est bien à la racine.
-3. Dans GitHub : `Settings` → `Pages`.
-4. Source : `Deploy from a branch`.
-5. Branch : `main`.
-6. Folder : `/(root)`.
-7. Enregistrer.
-8. Ouvrir :
-   `https://thibaultmourlane7.github.io/speedarti-calepinage-demo/`
+Déposer tous les fichiers à la racine du dépôt `thibaultmourlane7/speedarti-calepinage-demo`.
 
-Les ressources utilisent `?v=0.1.2` dans `index.html` pour limiter les problèmes de cache après mise à jour.
+GitHub :
+1. Settings
+2. Pages
+3. Deploy from a branch
+4. `main`
+5. `/(root)`
+
+`index.html` utilise `?v=0.2.0` pour forcer le rechargement des ressources après mise à jour.

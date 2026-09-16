@@ -1,4 +1,5 @@
 SpeedArti CALPI
-Pack: V0.1.2
-Moteur métier: V0.1.0 (inchangé)
-Formats/UI: V0.1.2
+Pack: V0.2.0
+Moteur métier: V0.2.0
+Formats: V0.1.2
+Objet: Rectangle + L + U + T + forme libre orthogonale

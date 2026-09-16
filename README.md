@@ -1,73 +1,50 @@
-# SpeedArti — CALPI V0.1.2 — Module complet
+# SpeedArti — CALPI V0.2.0 — Formes
 
-Démonstration autonome du module métier de calepinage SpeedArti.
+Cette version développe l'étape **Forme** du module de calepinage.
 
-## Contenu de cette version
+## Formes disponibles
+- Rectangle
+- L
+- U
+- T
+- Forme libre orthogonale
 
-- moteur métier pur séparé de l'interface (`engine.js`)
-- catalogue de formats de démonstration séparé (`formats.js`)
-- interface multi-étapes (`app.js`)
-- 8 familles visibles :
-  - Parquet massif
-  - Parquet contrecollé
-  - Stratifié
-  - Carrelage
-  - Lame PVC
-  - Dalle PVC
-  - Dalle terrasse
-  - Lame terrasse bois/composite
-- 5 formats rapides par famille
-- option `Dimensions manuelles` pour saisir les dimensions exactes
-- pose droite
-- pose décalée 1/2 avec cycle strict sur 2 rangées
-- pose décalée 1/3 avec cycle strict sur 3 rangées
-- orientation longueur / largeur
-- équilibrage première / dernière rive
-- stock virtuel des chutes
-- priorité au réemploi d'une chute compatible avant ouverture d'un élément neuf
-- traçabilité des chutes et interdiction du double usage
-- plan de pose
-- ordre de pose
-- contrôles et balises CALPI
-- tests automatiques
+`Importer un plan` reste volontairement hors V0.2.
 
-## Architecture
+## Forme libre
+La forme libre utilise un contour de points exacts en millimètres :
+- minimum 4 points ;
+- dernier point relié automatiquement au premier ;
+- segments horizontaux ou verticaux uniquement ;
+- auto-croisement interdit ;
+- aperçu SVG et surface exacte ;
+- coordonnées modifiables point par point.
 
-- `index.html` : entrée de la démo GitHub Pages
-- `app.js` : interface utilisateur
-- `styles.css` : styles de démonstration
-- `engine.js` : moteur métier pur — source à préserver lors de l'intégration SpeedArti
-- `formats.js` : formats de démonstration sélectionnables
-- `tests.js` : tests automatiques
-- `FIELDS.md` : contrat des champs
-- `BALISES.md` : registre des contrôles
-- `TESTS.md` : plan de tests métier
-- `DEPLOY_GITHUB_PAGES.md` : procédure de publication
-- `VERSION.txt` : version du pack
+Des bases Rectangle / L / U / T sont proposées dans l'éditeur pour accélérer la saisie, mais elles restent modifiables.
 
-## Règles importantes
+## Moteur
+Le moteur reste pur et indépendant de l'interface.
 
-Les formats proposés sont des formats de démonstration et non une base fabricant contractuelle.
-L'utilisateur peut toujours sélectionner `Dimensions manuelles`.
+La géométrie des formes complexes n'est jamais remplacée par un rectangle approximatif. Le moteur calcule un polygone exact puis génère les bandes de pose correspondant réellement à la forme.
 
-Aucun prix n'est calculé dans CALPI.
+### Limitation explicitement tracée
+En V0.2, les chutes créées par une **encoche complexe** sont encore optimisées de manière conservatrice comme fragments rectangulaires. La géométrie du plan reste exacte ; cette limite d'optimisation matière est signalée par `CALPI-036`.
 
-Le moteur ne doit jamais approximer silencieusement une donnée technique manquante.
+## Fichiers
+- `engine.js` : moteur métier V0.2.0
+- `formats.js` : formats matière
+- `app.js` : interface de démonstration
+- `styles.css`
+- `index.html`
+- `tests.js`
+- `FIELDS.md`
+- `BALISES.md`
+- `TESTS.md`
 
-## Test
-
-Exécuter :
+## Tests
 
 `node tests.js`
 
 Résultat attendu :
 
-`CALPI tests V0.1.2: OK`
-
-## GitHub Pages
-
-Le dépôt prévu est :
-
-`thibaultmourlane7/speedarti-calepinage-demo`
-
-La publication doit utiliser la branche `main` et le dossier racine `/`.
+`CALPI tests V0.2.0: OK`
