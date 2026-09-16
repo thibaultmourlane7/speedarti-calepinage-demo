@@ -1,0 +1,10 @@
+feat(calpi): pack complet V0.1.2 avec formats rapides et saisie manuelle
+
+- livre le module CALPI complet
+- conserve le moteur métier séparé
+- ajoute 8 familles de matériaux
+- ajoute 5 formats rapides par famille
+- ajoute Dimensions manuelles
+- verrouille les cycles 1/2 et 1/3 par tests
+- conserve la gestion des chutes, rives, plan et ordre de pose
+- ajoute documentation champs, balises et déploiement GitHub Pages

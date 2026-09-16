@@ -1,0 +1,4 @@
+SpeedArti CALPI
+Pack: V0.1.2
+Moteur métier: V0.1.0 (inchangé)
+Formats/UI: V0.1.2
